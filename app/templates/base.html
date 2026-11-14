@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}岸站 AIS 可信航迹{% endblock %}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", sans-serif; line-height: 1.5; }
+    header { border-bottom: 1px solid #8884; padding: .75rem 1.25rem; display: flex; gap: 1.25rem; align-items: baseline; flex-wrap: wrap; }
+    header h1 { font-size: 1.05rem; margin: 0; }
+    header nav a { margin-right: 1rem; }
+    main { padding: 1.25rem; max-width: 1280px; }
+    a { color: #2a6fb0; }
+    table { border-collapse: collapse; width: 100%; margin: .75rem 0 1.5rem; font-size: .875rem; }
+    th, td { border-bottom: 1px solid #8883; padding: .35rem .5rem; text-align: left; vertical-align: top; }
+    th { background: #8881; font-weight: 600; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .muted { color: #777; }
+    .badge { display: inline-block; padding: .05rem .45rem; border-radius: .6rem; font-size: .8rem; }
+    .ok { background: #1a7f3722; color: #1a7f37; }
+    .bad { background: #b4231822; color: #b42318; }
+    .warn { background: #9a670022; color: #9a6700; }
+    form.upload { border: 1px dashed #8886; padding: 1rem; border-radius: .5rem; margin-bottom: 1.5rem; }
+    form.upload input[type=file] { margin-right: .75rem; }
+    button { padding: .35rem .9rem; }
+    .error { border: 1px solid #b4231855; background: #b4231811; padding: 1rem; border-radius: .5rem; }
+    code { font-size: .85em; }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>岸站 AIS 可信航迹</h1>
+  <nav>
+    <a href="/">总览</a>
+    <a href="/vessels">船舶</a>
+  </nav>
+  <span class="muted">同秒同位置去重 · 同秒异位整秒隔离 · 相对上一可信点 &gt; {{ max_speed|default(60) }} 节隔离 · 迟到电文全船重算</span>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

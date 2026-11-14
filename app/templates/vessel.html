@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}船舶 {{ vessel["mmsi"] }}{% endblock %}
+{% block content %}
+<p><a href="/">← 返回总览</a></p>
+<h2>MMSI {{ vessel["mmsi"] }}</h2>
+<p>
+  <span class="badge ok">可信 {{ points|length }}</span>
+  <span class="badge bad">隔离 {{ isolated|length }}</span>
+  <span class="muted">判定版本 v{{ version }} · 更新于 {{ vessel["updated_at"] }}</span>
+</p>
+<p>
+  <a href="/vessels/{{ vessel['mmsi'] }}/track.csv">下载可信航迹 CSV</a> ·
+  <a href="/vessels/{{ vessel['mmsi'] }}/isolated.csv">下载隔离清单 CSV</a>
+</p>
+<p class="muted">涉及原档批次（可分别下载原档）：
+  {% for b in batches %}<a href="/batches/{{ b['id'] }}">{{ b["filename"] }}</a>{% if not loop.last %} · {% endif %}{% endfor %}
+</p>
+
+<h2>可信点（按 UTC 排序）</h2>
+{% if points %}
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th class="num">#</th><th>UTC 秒</th><th>UTC 时间</th><th class="num">纬度</th><th class="num">经度</th><th class="num">相对上一点速度 (kn)</th><th>岸站</th><th>批次</th></tr>
+  </thead>
+  <tbody>
+  {% for p in points %}
+    <tr>
+      <td class="num">{{ p["seq"] + 1 }}</td>
+      <td class="num">{{ p["utc"] }}</td>
+      <td>{{ p["utc"]|utc }}</td>
+      <td class="num">{{ "%.6f"|format(p["lat"]) }}</td>
+      <td class="num">{{ "%.6f"|format(p["lon"]) }}</td>
+      <td class="num">{{ "-" if p["speed_knots"] is none else "%.1f"|format(p["speed_knots"]) }}</td>
+      <td>{{ p["station"] }}</td>
+      <td><a href="/batches/{{ p['batch_id'] }}">{{ p["batch_id"][:10] }}…</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">该船没有可信点。</p>
+{% endif %}
+
+<h2>隔离记录与原因</h2>
+{% if isolated %}
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>UTC 秒</th><th class="num">纬度</th><th class="num">经度</th><th>岸站</th><th>原因</th><th>说明</th><th>原档</th></tr>
+  </thead>
+  <tbody>
+  {% for r in isolated %}
+    <tr>
+      <td class="num">{{ r["utc"] }}</td>
+      <td class="num">{{ "%.6f"|format(r["lat"]) }}</td>
+      <td class="num">{{ "%.6f"|format(r["lon"]) }}</td>
+      <td>{{ r["station"] }}</td>
+      <td><code>{{ r["reason"] }}</code></td>
+      <td>{{ r["detail"] or "" }}</td>
+      <td><a href="/batches/{{ r['batch_id'] }}/original.csv">第 {{ r["line_no"] }} 行</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">没有隔离记录。</p>
+{% endif %}
+{% endblock %}

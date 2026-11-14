@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}批次 {{ batch["filename"] }}{% endblock %}
+{% block content %}
+<p><a href="/">← 返回总览</a></p>
+<h2>批次 <code>{{ batch["id"][:12] }}…</code></h2>
+<table>
+  <tbody>
+    <tr><th>文件名</th><td>{{ batch["filename"] }}</td></tr>
+    <tr><th>上传时间</th><td>{{ batch["uploaded_at"] }}</td></tr>
+    <tr><th>SHA-256</th><td><code>{{ batch["sha256"] }}</code></td></tr>
+    <tr><th>大小</th><td>{{ batch["byte_size"] }} 字节</td></tr>
+    <tr><th>状态</th><td><span class="badge ok">已发布</span></td></tr>
+    <tr><th>接受 / 拒绝行</th><td>{{ batch["accepted_count"] }} / {{ batch["rejected_count"] }}</td></tr>
+    <tr><th>原档</th><td><a href="/batches/{{ batch['id'] }}/original.csv">下载原档 CSV</a></td></tr>
+  </tbody>
+</table>
+
+<h2>本批记录判定</h2>
+<p class="muted">判定按该船全部已发布记录整体重算，因此同批旧记录的结论可能被后到批次改变。</p>
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th class="num">原档行号</th><th>MMSI</th><th>岸站</th><th>UTC</th><th class="num">纬度</th><th class="num">经度</th><th>判定</th><th>原因</th></tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="num">{{ r["line_no"] }}</td>
+      <td><a href="/vessels/{{ r['mmsi'] }}">{{ r["mmsi"] }}</a></td>
+      <td>{{ r["station"] }}</td>
+      <td>{{ r["utc"]|utc }} <span class="muted">({{ r["utc"] }})</span></td>
+      <td class="num">{{ "%.6f"|format(r["lat"]) }}</td>
+      <td class="num">{{ "%.6f"|format(r["lon"]) }}</td>
+      <td>
+        {% if r["status"] == "trusted" %}
+          <span class="badge ok">可信</span>
+        {% elif r["status"] == "isolated" %}
+          <span class="badge bad">隔离</span>
+        {% else %}
+          <span class="badge warn">未判定</span>
+        {% endif %}
+      </td>
+      <td>{{ r["reason"] or "" }}{% if r["detail"] %} — {{ r["detail"] }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if rejects %}
+<h2>解析拒绝行（未进入航迹计算）</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th class="num">行号</th><th>原因</th><th>说明</th></tr></thead>
+  <tbody>
+  {% for r in rejects %}
+    <tr><td class="num">{{ r["line_no"] }}</td><td><code>{{ r["reason"] }}</code></td><td>{{ r["detail"] }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<p><a href="/">← 返回总览</a></p>
+<div class="error">
+  <h2>{{ title }}</h2>
+  <p>{{ message }}</p>
+  <p class="muted">此前的已发布航迹没有改变。</p>
+</div>
+{% endblock %}

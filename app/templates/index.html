@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>上传原档</h2>
+<p class="muted">CSV 需含岸站号、MMSI、UTC 秒、纬度、经度。表头可用 <code>station,mmsi,utc,lat,lon</code>
+（也接受 <code>shore_station</code>、<code>utc_seconds</code>、<code>latitude</code>、<code>longitude</code> 等常见别名）。
+上传成功后原档与判定作为同一批次一同发布；解析或写盘失败时既有航迹保持不变。</p>
+<form class="upload" method="post" action="/upload" enctype="multipart/form-data">
+  <input type="file" name="file" accept=".csv,text/csv,text/plain" required>
+  <button type="submit">上传并重算</button>
+</form>
+
+<h2>已发布批次</h2>
+{% if batches %}
+<div class="scroll">
+<table>
+  <thead>
+    <tr>
+      <th>上传时间</th><th>文件名</th>
+      <th class="num">接受行</th><th class="num">拒绝行</th><th class="num">涉及船数</th>
+      <th>原档 SHA-256</th><th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for b in batches %}
+    <tr>
+      <td>{{ b["uploaded_at"] }}</td>
+      <td><a href="/batches/{{ b['id'] }}">{{ b["filename"] }}</a></td>
+      <td class="num">{{ b["accepted_count"] }}</td>
+      <td class="num">{% if b["rejected_count"] %}<span class="badge warn">{{ b["rejected_count"] }}</span>{% else %}0{% endif %}</td>
+      <td class="num">{{ b["vessel_count"] }}</td>
+      <td><code title="{{ b['sha256'] }}">{{ b["sha256"][:16] }}…</code></td>
+      <td><a href="/batches/{{ b['id'] }}/original.csv">下载原档</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">还没有已发布批次。</p>
+{% endif %}
+
+<h2>船舶</h2>
+{% if vessels %}
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>MMSI</th><th class="num">可信点</th><th class="num">隔离点</th><th class="num">版本</th><th>首点</th><th>末点</th><th>导出</th></tr>
+  </thead>
+  <tbody>
+  {% for v in vessels %}
+    <tr>
+      <td><a href="/vessels/{{ v['mmsi'] }}">{{ v["mmsi"] }}</a></td>
+      <td class="num">{{ v["trusted_count"] }}</td>
+      <td class="num">{% if v["isolated_count"] %}<span class="badge bad">{{ v["isolated_count"] }}</span>{% else %}0{% endif %}</td>
+      <td class="num">{{ v["version"] }}</td>
+      <td>{{ v["first_utc"]|utc }}</td>
+      <td>{{ v["last_utc"]|utc }}</td>
+      <td>
+        <a href="/vessels/{{ v['mmsi'] }}/track.csv">可信航迹</a> ·
+        <a href="/vessels/{{ v['mmsi'] }}/isolated.csv">隔离清单</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">还没有可信船舶数据。</p>
+{% endif %}
+{% endblock %}

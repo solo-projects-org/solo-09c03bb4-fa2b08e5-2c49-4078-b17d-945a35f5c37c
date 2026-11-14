@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}船舶列表{% endblock %}
+{% block content %}
+<p><a href="/">← 返回总览</a></p>
+<h2>船舶</h2>
+{% if vessels %}
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>MMSI</th><th class="num">记录数</th><th class="num">可信点</th><th class="num">隔离点</th><th class="num">版本</th><th>首点</th><th>末点</th></tr>
+  </thead>
+  <tbody>
+  {% for v in vessels %}
+    <tr>
+      <td><a href="/vessels/{{ v['mmsi'] }}">{{ v["mmsi"] }}</a></td>
+      <td class="num">{{ v["row_count"] }}</td>
+      <td class="num">{{ v["trusted_count"] }}</td>
+      <td class="num">{{ v["isolated_count"] }}</td>
+      <td class="num">{{ v["version"] }}</td>
+      <td>{{ v["first_utc"]|utc }}</td>
+      <td>{{ v["last_utc"]|utc }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">还没有船舶数据。</p>
+{% endif %}
+{% endblock %}
