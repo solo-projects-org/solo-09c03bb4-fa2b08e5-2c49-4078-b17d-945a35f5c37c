@@ -295,12 +295,22 @@ def speed_knots(lat1: float, lon1: float, lat2: float, lon2: float, dt: float) -
     return haversine_nm(lat1, lon1, lat2, lon2) / dt * SECONDS_PER_HOUR
 
 
-def evaluate_track(rows: Iterable[Candidate]) -> Evaluation:
+def evaluate_track(
+    rows: Iterable[Candidate], adjudications: dict[int, int] | None = None
+) -> Evaluation:
     """Recompute the whole vessel from its complete candidate set.
 
     Pure function; no database access so the semantics are easy to test.
+
+    ``adjudications`` maps a contested UTC second to the ``row_id`` the duty
+    officer chose to trust.  An adjudicated second is no longer isolated as a
+    whole: only the chosen candidate survives into the speed-gate pass (and is
+    still isolated there if it implies more than 60 kn from the previous
+    trusted point), while every other candidate of that second stays isolated
+    with the ``conflict`` reason.
     """
 
+    adjudications = adjudications or {}
     rows = sorted(rows, key=lambda c: (c.utc, c.station, c.lat, c.lon, c.row_id))
     by_second: dict[int, list[Candidate]] = {}
     for row in rows:
@@ -314,21 +324,49 @@ def evaluate_track(rows: Iterable[Candidate]) -> Evaluation:
         group = by_second[utc]
         distinct = {(c.lat, c.lon) for c in group}
         if len(distinct) > 1:
-            for c in group:
-                statuses[c.row_id] = ("isolated", "conflict", None)
-            second_reports.append(
-                {
-                    "utc": utc,
-                    "status": "conflict",
-                    "candidate_count": len(group),
-                    "distinct_positions": len(distinct),
-                    "max_drift_nm": max(
-                        haversine_nm(group[0].lat, group[0].lon, c.lat, c.lon) for c in group
+            chosen_id = adjudications.get(utc)
+            chosen = next((c for c in group if c.row_id == chosen_id), None)
+            if chosen is not None:
+                # The officer picked one original fix for this contested
+                # second.  The rejected candidates stay isolated; the chosen
+                # one proceeds to the speed-gate pass like any other fix.
+                for c in group:
+                    if c is chosen:
+                        continue
+                    statuses[c.row_id] = (
+                        "isolated",
+                        "conflict",
+                        f"该秒经人工采信候选 #{chosen.row_id}，其余异位记录继续隔离",
                     )
-                    if len(group) > 1
-                    else 0.0,
-                }
-            )
+                positions_by_second[utc] = [chosen]
+                second_reports.append(
+                    {
+                        "utc": utc,
+                        "status": "adjudicated",
+                        "candidate_count": len(group),
+                        "distinct_positions": len(distinct),
+                        "max_drift_nm": max(
+                            haversine_nm(chosen.lat, chosen.lon, c.lat, c.lon) for c in group
+                        ),
+                        "selected_row_id": chosen.row_id,
+                    }
+                )
+            else:
+                for c in group:
+                    statuses[c.row_id] = ("isolated", "conflict", None)
+                second_reports.append(
+                    {
+                        "utc": utc,
+                        "status": "conflict",
+                        "candidate_count": len(group),
+                        "distinct_positions": len(distinct),
+                        "max_drift_nm": max(
+                            haversine_nm(group[0].lat, group[0].lon, c.lat, c.lon) for c in group
+                        )
+                        if len(group) > 1
+                        else 0.0,
+                    }
+                )
         else:
             # Identical duplicates collapse: the earliest-arriving row wins so
             # that re-sent telegrams do not create pseudo-tracks.  The winner

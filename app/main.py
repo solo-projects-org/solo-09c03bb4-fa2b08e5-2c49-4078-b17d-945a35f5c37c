@@ -7,13 +7,13 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from .ais import MAX_SPEED_KNOTS
 from .db import connect, init_db, read_tx
-from .store import Store, UploadError
+from .store import Store, UploadError, AdjudicationError
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("AIS_DATA_DIR", BASE_DIR.parent / "data"))
@@ -73,7 +73,14 @@ def index(request: Request):
                 "SELECT * FROM batches WHERE status = 'published' ORDER BY uploaded_at DESC, id DESC"
             ).fetchall()
             vessels = conn.execute(
-                "SELECT * FROM vessels ORDER BY mmsi"
+                """
+                SELECT v.*,
+                       (SELECT COUNT(*) FROM adjudications a
+                         WHERE a.mmsi = v.mmsi AND a.state = 'pending_review') AS pending_review,
+                       (SELECT COUNT(*) FROM adjudications a
+                         WHERE a.mmsi = v.mmsi AND a.state = 'active') AS active_adjudications
+                FROM vessels v ORDER BY v.mmsi
+                """
             ).fetchall()
     finally:
         conn.close()
@@ -210,7 +217,14 @@ def vessels(request: Request):
     conn = _conn()
     try:
         with read_tx(conn):
-            rows = conn.execute("SELECT * FROM vessels ORDER BY mmsi").fetchall()
+            rows = conn.execute(
+                """
+                SELECT v.*,
+                       (SELECT COUNT(*) FROM adjudications a
+                         WHERE a.mmsi = v.mmsi AND a.state = 'pending_review') AS pending_review
+                FROM vessels v ORDER BY v.mmsi
+                """
+            ).fetchall()
     finally:
         conn.close()
     return _render(request, "vessels.html", vessels=rows)
@@ -250,6 +264,12 @@ def vessel_detail(request: Request, mmsi: str):
                 """,
                 (mmsi,),
             ).fetchall()
+            conflict_groups = _conflict_groups(conn, mmsi)
+            pending_count = conn.execute(
+                "SELECT COUNT(*) c FROM adjudications WHERE mmsi = ? AND state = 'pending_review'",
+                (mmsi,),
+            ).fetchone()["c"]
+            flash = request.query_params.get("msg")
     finally:
         conn.close()
     return _render(
@@ -260,6 +280,93 @@ def vessel_detail(request: Request, mmsi: str):
         isolated=isolated,
         batches=batches,
         version=version,
+        conflict_groups=conflict_groups,
+        pending_count=pending_count,
+        flash=flash,
+    )
+
+
+def _conflict_groups(conn: sqlite3.Connection, mmsi: str) -> list[dict]:
+    """Every contested second for the vessel with its complete raw record set.
+
+    Each group carries the fingerprint of the current set (so a stale page can
+    be rejected) and any stored adjudication (active or pending review).
+    """
+
+    rows = conn.execute(
+        "SELECT r.id, r.line_no, r.batch_id, r.station, r.utc, r.lat, r.lon, "
+        "       v.status AS verdict_status, v.reason AS verdict_reason, v.detail AS verdict_detail "
+        "FROM raw_rows r LEFT JOIN vessels ve ON ve.mmsi = r.mmsi "
+        "LEFT JOIN verdicts v ON v.mmsi = r.mmsi AND v.version = ve.version AND v.raw_row_id = r.id "
+        "WHERE r.mmsi = ? ORDER BY r.utc, r.id",
+        (mmsi,),
+    ).fetchall()
+    adjudications = {
+        r["utc"]: r
+        for r in conn.execute(
+            "SELECT * FROM adjudications WHERE mmsi = ?", (mmsi,)
+        ).fetchall()
+    }
+
+    by_second: dict[int, list] = {}
+    for r in rows:
+        by_second.setdefault(r["utc"], []).append(r)
+
+    groups: list[dict] = []
+    for utc in sorted(by_second):
+        group = by_second[utc]
+        if len({(r["lat"], r["lon"]) for r in group}) <= 1:
+            continue
+        fingerprint = Store.set_fingerprint([r["id"] for r in group])
+        groups.append(
+            {
+                "utc": utc,
+                "candidates": group,
+                "fingerprint": fingerprint,
+                "adjudication": adjudications.get(utc),
+                "fingerprint_ok": (
+                    adjudications[utc]["set_fingerprint"] == fingerprint
+                    if utc in adjudications
+                    else True
+                ),
+            }
+        )
+    return groups
+
+
+@app.post("/vessels/{mmsi}/adjudicate")
+async def adjudicate(
+    request: Request,
+    mmsi: str,
+    utc: int = Form(...),
+    selected_row_id: int = Form(...),
+    expected_version: int = Form(...),
+    set_fingerprint: str = Form(...),
+):
+    def worker():
+        conn = _conn()
+        try:
+            return _store(conn).adjudicate(
+                mmsi, utc, selected_row_id, expected_version, set_fingerprint
+            )
+        finally:
+            conn.close()
+
+    import anyio
+
+    try:
+        await anyio.to_thread.run_sync(worker)
+    except AdjudicationError as exc:
+        return _render(
+            request,
+            "error.html",
+            title="采信未发布",
+            message=exc.message,
+            status_code=exc.status,
+        )
+
+    return RedirectResponse(
+        url=f"/vessels/{mmsi}?msg=adjudicated", status_code=303
     )
 
 

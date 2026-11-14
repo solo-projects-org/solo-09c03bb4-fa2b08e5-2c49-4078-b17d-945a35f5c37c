@@ -44,7 +44,7 @@
 <div class="scroll">
 <table>
   <thead>
-    <tr><th>MMSI</th><th class="num">可信点</th><th class="num">隔离点</th><th class="num">版本</th><th>首点</th><th>末点</th><th>导出</th></tr>
+    <tr><th>MMSI</th><th class="num">可信点</th><th class="num">隔离点</th><th class="num">待复核</th><th class="num">版本</th><th>首点</th><th>末点</th><th>导出</th></tr>
   </thead>
   <tbody>
   {% for v in vessels %}
@@ -52,6 +52,7 @@
       <td><a href="/vessels/{{ v['mmsi'] }}">{{ v["mmsi"] }}</a></td>
       <td class="num">{{ v["trusted_count"] }}</td>
       <td class="num">{% if v["isolated_count"] %}<span class="badge bad">{{ v["isolated_count"] }}</span>{% else %}0{% endif %}</td>
+      <td class="num">{% if v["pending_review"] %}<span class="badge warn">{{ v["pending_review"] }}</span>{% else %}0{% endif %}</td>
       <td class="num">{{ v["version"] }}</td>
       <td>{{ v["first_utc"]|utc }}</td>
       <td>{{ v["last_utc"]|utc }}</td>

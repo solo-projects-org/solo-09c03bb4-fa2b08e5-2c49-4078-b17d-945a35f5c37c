@@ -40,6 +40,10 @@ class UploadError(Exception):
         self.message = message
 
 
+class AdjudicationError(UploadError):
+    """A manual adjudication submission cannot be published (409/400)."""
+
+
 @dataclass
 class PublishedBatch:
     batch_id: str
@@ -196,7 +200,164 @@ class Store:
             ],
         )
 
-    def _recompute_vessel(self, conn: sqlite3.Connection, mmsi: str, batch_id: str) -> None:
+    @staticmethod
+    def set_fingerprint(row_ids) -> str:
+        """Stable hash of the *complete* record set of one contested second.
+
+        A page rendered before the set changed submits the fingerprint it was
+        rendered with; publication only proceeds when it still matches.
+        """
+
+        joined = ",".join(str(i) for i in sorted(row_ids))
+        return hashlib.sha256(joined.encode("ascii")).hexdigest()
+
+    def _load_conflict_seconds(self, conn: sqlite3.Connection, mmsi: str) -> dict[int, list[int]]:
+        """Return the current per-second sets of raw row ids for seconds whose
+        candidates carry at least two distinct positions."""
+
+        rows = conn.execute(
+            "SELECT id, utc, lat, lon FROM raw_rows WHERE mmsi = ? ORDER BY utc, id",
+            (mmsi,),
+        ).fetchall()
+        seconds: dict[int, list[sqlite3.Row]] = {}
+        for r in rows:
+            seconds.setdefault(r["utc"], []).append(r)
+        return {
+            utc: [r["id"] for r in group]
+            for utc, group in seconds.items()
+            if len({(r["lat"], r["lon"]) for r in group}) > 1
+        }
+
+    def _sync_adjudication_state(
+        self, conn: sqlite3.Connection, mmsi: str, conflict_seconds: dict[int, list[int]]
+    ) -> None:
+        """Invalidate adjudications whose underlying record set has changed.
+
+        A late telegram that adds/removes a row for a contested second changes
+        the set the officer originally saw: the old choice can no longer stand
+        and is marked ``pending_review`` so the track reverts to full
+        conflict isolation until a human re-decides.
+        """
+
+        for adj in conn.execute(
+            "SELECT * FROM adjudications WHERE mmsi = ? AND state = 'active'", (mmsi,)
+        ).fetchall():
+            current = conflict_seconds.get(adj["utc"])
+            if current is None or self.set_fingerprint(current) != adj["set_fingerprint"]:
+                conn.execute(
+                    "UPDATE adjudications SET state = 'pending_review',"
+                    " reason = 'set_changed',"
+                    " detail = '迟到电文改变了该秒的完整记录集合，旧采信失效，待人工复核' "
+                    "WHERE id = ?",
+                    (adj["id"],),
+                )
+
+    def _active_adjudications(
+        self, conn: sqlite3.Connection, mmsi: str
+    ) -> dict[int, int]:
+        return {
+            r["utc"]: r["selected_row_id"]
+            for r in conn.execute(
+                "SELECT utc, selected_row_id FROM adjudications "
+                "WHERE mmsi = ? AND state = 'active'",
+                (mmsi,),
+            ).fetchall()
+        }
+
+    def adjudicate(
+        self,
+        mmsi: str,
+        utc: int,
+        selected_row_id: int,
+        expected_version: int,
+        expected_fingerprint: str,
+    ) -> int:
+        """Publish one manual adjudication inside a single write transaction.
+
+        The submission is refused when the page is stale (vessel version or the
+        contested second's record-set fingerprint no longer match) or when the
+        chosen fix itself violates the 60 kn gate.  On refusal the whole
+        transaction rolls back, so the previously published track is untouched.
+        Returns the new vessel version.
+        """
+
+        with write_tx(self.conn) as conn:
+            vessel = conn.execute(
+                "SELECT version FROM vessels WHERE mmsi = ?", (mmsi,)
+            ).fetchone()
+            if vessel is None:
+                raise AdjudicationError(404, "没有该船的已发布数据")
+            if vessel["version"] != expected_version:
+                raise AdjudicationError(
+                    409,
+                    f"页面基于判定版本 v{expected_version}，当前已是 v{vessel['version']}，"
+                    "请刷新页面后重新采信",
+                )
+
+            conflict_seconds = self._load_conflict_seconds(conn, mmsi)
+            current_ids = conflict_seconds.get(utc)
+            if current_ids is None:
+                raise AdjudicationError(409, "该秒已不是冲突秒，无需采信，请刷新页面")
+            fingerprint = self.set_fingerprint(current_ids)
+            if fingerprint != expected_fingerprint:
+                raise AdjudicationError(
+                    409, "页面打开后该秒的完整记录集合已变化（迟到电文），请刷新页面后重新采信"
+                )
+            if selected_row_id not in current_ids:
+                raise AdjudicationError(400, "所选记录不属于该冲突秒的原始记录集合")
+
+            conn.execute(
+                """
+                INSERT INTO adjudications
+                    (mmsi, utc, selected_row_id, state, set_fingerprint, vessel_version,
+                     decided_batch_id, reason, detail, decided_at)
+                VALUES (?, ?, ?, 'active', ?, ?, ?, NULL, NULL, ?)
+                ON CONFLICT(mmsi, utc) DO UPDATE SET
+                    selected_row_id = excluded.selected_row_id,
+                    state = 'active',
+                    set_fingerprint = excluded.set_fingerprint,
+                    vessel_version = excluded.vessel_version,
+                    decided_batch_id = excluded.decided_batch_id,
+                    reason = NULL,
+                    detail = NULL,
+                    decided_at = excluded.decided_at
+                """,
+                (
+                    mmsi,
+                    utc,
+                    selected_row_id,
+                    fingerprint,
+                    expected_version,
+                    conn.execute(
+                        "SELECT batch_id FROM raw_rows WHERE id = ?", (selected_row_id,)
+                    ).fetchone()["batch_id"],
+                    _utcnow(),
+                ),
+            )
+
+            new_version = self._recompute_vessel(conn, mmsi, None)
+
+            chosen = conn.execute(
+                "SELECT status, reason FROM verdicts WHERE mmsi = ? AND version = ? "
+                "AND raw_row_id = ?",
+                (mmsi, new_version, selected_row_id),
+            ).fetchone()
+            if chosen["status"] != "trusted":
+                # The chosen fix cannot join the trusted track (60 kn gate).
+                # Roll back *everything*, including the adjudication row, so a
+                # failed decision never publishes a contradictory state.
+                raise AdjudicationError(
+                    409,
+                    "所选原始定位未通过 60 节速度门限"
+                    + (f"（{chosen['reason']}），本次采信未发布，隔离状态保持不变" if chosen["reason"] else ""),
+                )
+            return new_version
+
+    def _recompute_vessel(
+        self, conn: sqlite3.Connection, mmsi: str, batch_id: str | None
+    ) -> int:
+        """Full replay of one vessel.  Returns the new vessel version."""
+
         rows = conn.execute(
             "SELECT id, batch_id, station, utc, lat, lon FROM raw_rows WHERE mmsi = ? "
             "ORDER BY utc, id",
@@ -213,7 +374,35 @@ class Store:
             )
             for r in rows
         ]
-        evaluation = ais.evaluate_track(candidates)
+
+        # A record set changed by a late telegram invalidates any active
+        # adjudication for that contested second before the replay.
+        conflict_seconds = self._load_conflict_seconds(conn, mmsi)
+        self._sync_adjudication_state(conn, mmsi, conflict_seconds)
+        adjudications = self._active_adjudications(conn, mmsi)
+
+        evaluation = ais.evaluate_track(candidates, adjudications)
+
+        # The chosen point of an active adjudication may itself fail the speed
+        # gate: the adjudication cannot stand and goes back to pending review.
+        for adj in conn.execute(
+            "SELECT id, utc, selected_row_id FROM adjudications "
+            "WHERE mmsi = ? AND state = 'active'",
+            (mmsi,),
+        ).fetchall():
+            status, reason, detail = evaluation.candidate_status.get(
+                adj["selected_row_id"], ("isolated", None, None)
+            )
+            if status != "trusted":
+                conn.execute(
+                    "UPDATE adjudications SET state = 'pending_review', reason = ?, detail = ? "
+                    "WHERE id = ?",
+                    (
+                        reason or "gate_failed",
+                        (detail or "") + "（采信点未通过门限，航迹恢复冲突隔离）",
+                        adj["id"],
+                    ),
+                )
 
         current = conn.execute(
             "SELECT version FROM vessels WHERE mmsi = ?", (mmsi,)
@@ -233,7 +422,7 @@ class Store:
                 first_utc = excluded.first_utc,
                 last_utc = excluded.last_utc,
                 updated_at = excluded.updated_at,
-                last_batch_id = excluded.last_batch_id
+                last_batch_id = COALESCE(excluded.last_batch_id, vessels.last_batch_id)
             """,
             (
                 mmsi,
@@ -288,6 +477,13 @@ class Store:
             "DELETE FROM track_points WHERE mmsi = ? AND version < ?", (mmsi, version)
         )
         conn.execute("DELETE FROM verdicts WHERE mmsi = ? AND version < ?", (mmsi, version))
+
+        # Remember which vessel version an adjudication was decided against.
+        conn.execute(
+            "UPDATE adjudications SET vessel_version = ? WHERE mmsi = ? AND state = 'active'",
+            (version, mmsi),
+        )
+        return version
 
 
 def _fsync_dir(path: Path) -> None:

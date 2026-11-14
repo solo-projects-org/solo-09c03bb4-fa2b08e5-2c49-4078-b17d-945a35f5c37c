@@ -7,7 +7,72 @@
   <span class="badge ok">可信 {{ points|length }}</span>
   <span class="badge bad">隔离 {{ isolated|length }}</span>
   <span class="muted">判定版本 v{{ version }} · 更新于 {{ vessel["updated_at"] }}</span>
+  {% if pending_count %}<span class="badge warn">待复核 {{ pending_count }}</span>{% endif %}
 </p>
+{% if flash == "adjudicated" %}
+<p class="flash ok">采信已发布：所选原始定位通过 60 节门限并进入可信航迹，其余冲突记录保持隔离。</p>
+{% endif %}
+
+<h2>冲突秒人工复核</h2>
+<p class="muted">同一 UTC 秒出现不同位置时，该秒原始记录默认全部隔离。可在此指定一条原始定位采信；
+采信点仍须通过相对上一可信点的 60 节速度门限。页面基于渲染时的完整记录集合生成指纹，
+若打开后集合被迟到电文改变，旧页面提交将被拒绝。</p>
+{% if conflict_groups %}
+  {% for g in conflict_groups %}
+  <div class="conflict">
+    <h3>{{ g["utc"]|utc }} <span class="muted">(UTC {{ g["utc"] }})</span>
+      {% set adj = g["adjudication"] %}
+      {% if adj and adj["state"] == "active" %}
+        <span class="badge ok">已采信 · 候选 #{{ adj["selected_row_id"] }}</span>
+        <span class="muted">采信于 {{ adj["decided_at"] }}</span>
+      {% elif adj and adj["state"] == "pending_review" %}
+        <span class="badge warn">待复核（旧采信已失效）</span>
+        <span class="muted">{{ adj["detail"] or adj["reason"] }}</span>
+      {% else %}
+        <span class="badge bad">未采信 · 整秒隔离</span>
+      {% endif %}
+    </h3>
+    {% if adj and adj["state"] == "pending_review" and not g["fingerprint_ok"] %}
+    <p class="flash warn">该秒记录集合已不同于原采信时的集合，请核对下列原始行后重新选择。</p>
+    {% endif %}
+    <form method="post" action="/vessels/{{ vessel['mmsi'] }}/adjudicate" class="adjudicate">
+      <input type="hidden" name="utc" value="{{ g['utc'] }}">
+      <input type="hidden" name="expected_version" value="{{ version }}">
+      <input type="hidden" name="set_fingerprint" value="{{ g['fingerprint'] }}">
+      <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>选择</th><th class="num">原始行</th><th>岸站</th><th class="num">纬度</th><th class="num">经度</th><th>批次</th><th>当前判定</th></tr>
+        </thead>
+        <tbody>
+        {% for c in g["candidates"] %}
+          <tr>
+            <td><input type="radio" name="selected_row_id" value="{{ c['id'] }}"
+                {% if adj and adj['selected_row_id'] == c['id'] and adj['state'] == 'active' %}checked{% endif %} required></td>
+            <td class="num">{{ c["line_no"] }}</td>
+            <td>{{ c["station"] }}</td>
+            <td class="num">{{ "%.6f"|format(c["lat"]) }}</td>
+            <td class="num">{{ "%.6f"|format(c["lon"]) }}</td>
+            <td><a href="/batches/{{ c['batch_id'] }}/original.csv">{{ c["batch_id"][:10] }}…</a></td>
+            <td>
+              {% if c["verdict_status"] == "trusted" %}
+                <span class="badge ok">可信</span>
+              {% else %}
+                <span class="badge bad">隔离 · <code>{{ c["verdict_reason"] }}</code></span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <button type="submit">采信所选原始定位并重判航迹</button>
+    </form>
+  </div>
+  {% endfor %}
+{% else %}
+<p class="muted">该船没有同秒异位的冲突秒。</p>
+{% endif %}
 <p>
   <a href="/vessels/{{ vessel['mmsi'] }}/track.csv">下载可信航迹 CSV</a> ·
   <a href="/vessels/{{ vessel['mmsi'] }}/isolated.csv">下载隔离清单 CSV</a>

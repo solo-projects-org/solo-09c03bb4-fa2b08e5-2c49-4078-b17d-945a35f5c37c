@@ -26,6 +26,12 @@
     form.upload input[type=file] { margin-right: .75rem; }
     button { padding: .35rem .9rem; }
     .error { border: 1px solid #b4231855; background: #b4231811; padding: 1rem; border-radius: .5rem; }
+    .flash { padding: .6rem .9rem; border-radius: .5rem; margin: .75rem 0; font-size: .9rem; }
+    .flash.ok { border: 1px solid #1a7f3755; background: #1a7f3711; }
+    .flash.warn { border: 1px solid #9a670055; background: #9a670011; }
+    .conflict { border: 1px solid #8885; border-radius: .5rem; padding: .75rem 1rem; margin: 1rem 0; }
+    .conflict h3 { margin: .25rem 0 .5rem; font-size: .95rem; }
+    form.adjudicate button { margin-top: .5rem; }
     code { font-size: .85em; }
     .scroll { overflow-x: auto; }
   </style>
@@ -37,7 +43,7 @@
     <a href="/">总览</a>
     <a href="/vessels">船舶</a>
   </nav>
-  <span class="muted">同秒同位置去重 · 同秒异位整秒隔离 · 相对上一可信点 &gt; {{ max_speed|default(60) }} 节隔离 · 迟到电文全船重算</span>
+  <span class="muted">同秒同位置去重 · 同秒异位整秒隔离（可人工采信） · 相对上一可信点 &gt; {{ max_speed|default(60) }} 节门限 · 迟到电文全船重算、旧采信自动失效待复核</span>
 </header>
 <main>
 {% block content %}{% endblock %}

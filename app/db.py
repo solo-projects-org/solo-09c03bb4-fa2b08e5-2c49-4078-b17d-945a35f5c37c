@@ -100,6 +100,30 @@ CREATE TABLE IF NOT EXISTS verdicts (
     PRIMARY KEY (mmsi, version, raw_row_id)
 );
 CREATE INDEX IF NOT EXISTS verdicts_version ON verdicts(mmsi, version);
+
+-- One manual adjudication per contested (mmsi, UTC second).  ``state`` is
+-- 'active' while the chosen row feeds the trusted track; it becomes
+-- 'pending_review' automatically when the record set of that second changes
+-- (a late telegram) or the chosen point fails the 60 kn gate on recompute.
+-- ``set_fingerprint`` is the hash of the complete set of raw row ids for the
+-- vessel at that second at decision time; a stale page submits the old hash
+-- and is rejected.
+CREATE TABLE IF NOT EXISTS adjudications (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    mmsi             TEXT NOT NULL,
+    utc              INTEGER NOT NULL,
+    selected_row_id  INTEGER NOT NULL REFERENCES raw_rows(id),
+    state            TEXT NOT NULL,
+    set_fingerprint TEXT NOT NULL,
+    vessel_version   INTEGER NOT NULL,
+    decided_batch_id TEXT,
+    reason           TEXT,
+    detail           TEXT,
+    decided_at       TEXT NOT NULL,
+    UNIQUE (mmsi, utc)
+);
+CREATE INDEX IF NOT EXISTS adjudications_mmsi ON adjudications(mmsi);
+CREATE INDEX IF NOT EXISTS adjudications_state ON adjudications(state);
 """
 
 
